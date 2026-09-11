@@ -15,6 +15,7 @@
 #include "linglong/api/types/v1/RepositoryCacheMergedItem.hpp"
 #include "linglong/common/formatter.h"
 #include "linglong/common/gkeyfile_wrapper.h"
+#include "linglong/common/error.h"
 #include "linglong/common/strings.h"
 #include "linglong/package/fuzzy_reference.h"
 #include "linglong/package/layer_dir.h"
@@ -2319,7 +2320,7 @@ utils::error::Result<void> createBinaryWrapperScript(const std::filesystem::path
     openFlags |= force ? O_TRUNC : O_EXCL;
     int fd = ::open(path.c_str(), openFlags, 0755);
     if (fd < 0) {
-        return LINGLONG_ERR(fmt::format("open {}: {}", path.string(), std::strerror(errno)));
+        return LINGLONG_ERR(fmt::format("open {}: {}", path.string(), common::error::errorString(errno)));
     }
 
     std::string content = buildWrapperScriptContent(appID, command, customCommand);
@@ -2329,7 +2330,7 @@ utils::error::Result<void> createBinaryWrapperScript(const std::filesystem::path
         ::close(fd);
         std::error_code rmEc;
         std::filesystem::remove(path, rmEc);
-        return LINGLONG_ERR(fmt::format("fchmod {}: {}", path.string(), std::strerror(errno)));
+        return LINGLONG_ERR(fmt::format("fchmod {}: {}", path.string(), common::error::errorString(errno)));
     }
 
     ssize_t written = ::write(fd, content.data(), content.size());
@@ -2337,7 +2338,7 @@ utils::error::Result<void> createBinaryWrapperScript(const std::filesystem::path
         ::close(fd);
         std::error_code rmEc;
         std::filesystem::remove(path, rmEc);
-        return LINGLONG_ERR(fmt::format("write to {}: {}", path.string(), std::strerror(errno)));
+        return LINGLONG_ERR(fmt::format("write to {}: {}", path.string(), common::error::errorString(errno)));
     }
     if (static_cast<size_t>(written) != content.size()) {
         ::close(fd);
@@ -2349,7 +2350,7 @@ utils::error::Result<void> createBinaryWrapperScript(const std::filesystem::path
     if (::close(fd) != 0) {
         std::error_code rmEc;
         std::filesystem::remove(path, rmEc);
-        return LINGLONG_ERR(fmt::format("close {}: {}", path.string(), std::strerror(errno)));
+        return LINGLONG_ERR(fmt::format("close {}: {}", path.string(), common::error::errorString(errno)));
     }
 
     return LINGLONG_OK;
@@ -2374,9 +2375,10 @@ OSTreeRepo::exportAppBinaries(const std::filesystem::path &rootEntriesDir,
     auto appBinDir = binDir / "apps" / item.info.id / "bin";
 
     // Helper: create a wrapper script and a symlink in entries/bin/ pointing to it
-    auto exportOne = [&](const std::string &name) -> void {
+    auto exportOne = [&](const std::string &name,
+                         const std::vector<std::string> &command) -> void {
         auto realScript = appBinDir / name;
-        auto ret = createBinaryWrapperScript(realScript, item.info.id, cmd);
+        auto ret = createBinaryWrapperScript(realScript, item.info.id, command);
         if (!ret) {
             LogW("Failed to create binary script {} for {}: {}",
                  name,
@@ -2402,8 +2404,8 @@ OSTreeRepo::exportAppBinaries(const std::filesystem::path &rootEntriesDir,
         }
     };
 
-    // Always export a script named after the appid
-    exportOne(item.info.id);
+    // Always export a script named after the appid, using the full command array
+    exportOne(item.info.id, cmd);
 
     // Export additional scripts for each name in exportedBinaries
     if (item.info.exportedBinaries) {
@@ -2416,7 +2418,7 @@ OSTreeRepo::exportAppBinaries(const std::filesystem::path &rootEntriesDir,
                      nameValidation.error().message());
                 continue;
             }
-            exportOne(name);
+            exportOne(name, { name });
         }
     }
 
@@ -2472,7 +2474,7 @@ utils::error::Result<void> OSTreeRepo::exportAppBinary(const std::string &appID,
         int tempFd = ::mkstemp(tempTemplate);
         if (tempFd < 0) {
             return LINGLONG_ERR(fmt::format("failed to create temp file for bash validation: {}",
-                                            std::strerror(errno)));
+                                            common::error::errorString(errno)));
         }
         std::string tempPath(tempTemplate);
         ssize_t written = ::write(tempFd, scriptContent.data(), scriptContent.size());
@@ -2506,20 +2508,32 @@ utils::error::Result<void> OSTreeRepo::exportAppBinary(const std::string &appID,
     if (!ret) {
         return LINGLONG_ERR(ret);
     }
-
     // Create or update symlink: entries/bin/<scriptName> → apps/APPID/bin/<scriptName>
     auto target = std::filesystem::path("apps") / appID / "bin" / scriptName;
     std::error_code ec;
     if (std::filesystem::exists(linkPath, ec) || std::filesystem::is_symlink(linkPath, ec)) {
-        std::filesystem::remove(linkPath, ec);
+        if (!force) {
+            // Check if the existing symlink already points to this app's script
+            auto existingTarget = std::filesystem::read_symlink(linkPath, ec);
+            if (ec || existingTarget != target) {
+                return LINGLONG_ERR(fmt::format(
+                  "symlink {} already exists and points to a different target; use --force to overwrite",
+                  linkPath.string()));
+            }
+            // Symlink already points to the correct target; nothing to do
+        } else {
+            std::filesystem::remove(linkPath, ec);
+        }
     }
-    std::filesystem::create_symlink(target, linkPath, ec);
-    if (ec) {
-        LogW("Failed to create symlink {} → {} for {}: {}",
-             linkPath.string(),
-             target.string(),
-             appID,
-             ec.message());
+    if (force || !std::filesystem::exists(linkPath, ec)) {
+        std::filesystem::create_symlink(target, linkPath, ec);
+        if (ec) {
+            LogW("Failed to create symlink {} → {} for {}: {}",
+                 linkPath.string(),
+                 target.string(),
+                 appID,
+                 ec.message());
+        }
     }
 
     return LINGLONG_OK;

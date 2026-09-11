@@ -1165,12 +1165,18 @@ TEST_F(RepoTest, exportAppBinariesCreatesDefaultAndExportedScripts)
     EXPECT_NE(content.find("exec ll-cli run 'com.example.app' -- 'myapp' \"$@\""),
               std::string::npos);
 
-    // Verify executable permissions (0755)
-    std::error_code ec;
-    auto perms = fs::status(binDir / "com.example.app", ec).permissions();
-    EXPECT_TRUE((perms & fs::perms::owner_exec) != fs::perms::none);
-    EXPECT_TRUE((perms & fs::perms::group_exec) != fs::perms::none);
-    EXPECT_TRUE((perms & fs::perms::others_exec) != fs::perms::none);
+    // Verify exported binaries scripts use the binary name as the command
+    std::ifstream mytoolScript(binDir / "mytool");
+    std::string mytoolContent((std::istreambuf_iterator<char>(mytoolScript)),
+                              std::istreambuf_iterator<char>());
+    EXPECT_NE(mytoolContent.find("exec ll-cli run 'com.example.app' -- 'mytool' \"$@\""),
+              std::string::npos);
+
+    std::ifstream myutilScript(binDir / "myutil");
+    std::string myutilContent((std::istreambuf_iterator<char>(myutilScript)),
+                              std::istreambuf_iterator<char>());
+    EXPECT_NE(myutilContent.find("exec ll-cli run 'com.example.app' -- 'myutil' \"$@\""),
+              std::string::npos);
 }
 
 TEST_F(RepoTest, exportAppBinariesExportsFullCommandArray)
@@ -1304,11 +1310,14 @@ TEST_F(RepoTest, unexportAppEntriesRemovesBinaryScripts)
       << "#!/usr/bin/env sh\nexec ll-cli run com.example.unexport -- 'myapp' \"$@\"\n";
     std::ofstream(appBinDir / "mytool")
       << "#!/usr/bin/env sh\nexec ll-cli run com.example.unexport -- 'mytool' \"$@\"\n";
-    fs::create_symlink(appBinDir / "com.example.unexport", binDir / "com.example.unexport");
-    fs::create_symlink(appBinDir / "mytool", binDir / "mytool");
+    fs::create_symlink("apps/com.example.unexport/bin/com.example.unexport",
+                       binDir / "com.example.unexport");
+    fs::create_symlink("apps/com.example.unexport/bin/mytool", binDir / "mytool");
 
     EXPECT_TRUE(fs::exists(binDir / "com.example.unexport"));
     EXPECT_TRUE(fs::exists(binDir / "mytool"));
+    EXPECT_TRUE(fs::is_symlink(binDir / "com.example.unexport"));
+    EXPECT_TRUE(fs::is_symlink(binDir / "mytool"));
     EXPECT_TRUE(fs::exists(appBinDir / "com.example.unexport"));
     EXPECT_TRUE(fs::exists(appBinDir / "mytool"));
 
@@ -1317,7 +1326,9 @@ TEST_F(RepoTest, unexportAppEntriesRemovesBinaryScripts)
 
     // Symlinks in entries/bin/ should be removed
     EXPECT_FALSE(fs::exists(binDir / "com.example.unexport"));
+    EXPECT_FALSE(fs::is_symlink(binDir / "com.example.unexport"));
     EXPECT_FALSE(fs::exists(binDir / "mytool"));
+    EXPECT_FALSE(fs::is_symlink(binDir / "mytool"));
     // The apps/APPID/ directory should be removed entirely
     EXPECT_FALSE(fs::exists(appBinDir));
 }

@@ -425,12 +425,12 @@ utils::error::Result<void> PackageManager::switchAppVersion(const package::Refer
     LINGLONG_TRACE("remove old reference after install")
     LogI("switch app version from {} to {}", oldRef.toString(), newRef.toString());
 
-    auto res = applyApp(newRef);
+    auto res = unapplyApp(oldRef);
     if (!res) {
         return LINGLONG_ERR(res);
     }
 
-    res = unapplyApp(oldRef);
+    res = applyApp(newRef);
     if (!res) {
         return LINGLONG_ERR(res);
     }
